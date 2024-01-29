@@ -1,0 +1,243 @@
+#include <msp430.h>
+#include <inttypes.h>
+#include <msp430g2553.h>
+#include <stdio.h>
+
+#define CMD         0
+#define DATA        1
+#define LCD_OUT     P2OUT
+#define LCD_DIR     P2DIR
+#define D4          BIT4
+#define D5          BIT5
+#define D6          BIT6
+#define D7          BIT7
+#define RS          BIT2
+#define EN          BIT3
+
+//left ultrasonic sensor
+#define LEFT_TRIGGER_PIN   BIT3    // P1.3 (GPIO pin for TRIGGER) change to P1.1
+#define LEFT_ECHO_PIN      BIT0    // P2.0 (GPIO pin for ECHO)
+#define LED_PIN            BIT6    // P1.6 (Built-in LED)
+//right ultrasonic sensor
+#define RIGHT_TRIGGER_PIN  BIT5    // P1.5 (Trigger)
+#define RIGHT_ECHO_PIN     BIT4    // P1.4
+
+//buzzer
+#define BUZZER BIT2                // P1.2
+
+//variables
+volatile unsigned int left_distance = 0; //left ultrasonic sensor
+volatile unsigned int right_distance = 0; //right ultrasonic sensor
+char str[16];                               //allow string to accomodate more digits
+// Delay function for producing delay in 0.1 ms increments
+void delay(uint8_t t)
+{
+    uint8_t i;
+    for(i=t; i > 0; i--) { __delay_cycles(100); }
+}
+
+//integer to char conversion
+void inttostr(char str[], int num)
+{
+int i, rem, len = 0, n;
+n = num;
+if(n == 0) {len=1;}
+else {while (n != 0) {len++; n /= 10;}}
+for (i = 0; i < len; i++) {rem = num % 10; num = num / 10; str[len - (i + 1)] = rem + '0';}
+//str[len] = '\0';
+    if(num < 100){
+        str[len] = ' ';
+        str[len+1] = ' ';
+        str[len+2] = '\0';
+    }
+    if(num >= 100 && num <= 999){
+        str[len] = ' ';
+        str[len+1] = '\0';
+    }
+    if(num >= 1000){
+        str[len] = '\0';
+    }
+
+}
+
+// Function to pulse EN pin after data is written
+void pulseEN(void)
+{
+    LCD_OUT |= EN;   delay(1); LCD_OUT &= ~EN;  delay(1);
+}
+
+//Function to write data/command to LCD
+void lcd_write(uint8_t value, uint8_t mode)
+{
+    if(mode == CMD)  { LCD_OUT &= ~RS; }            // Set RS -> LOW for Command mode
+    else             { LCD_OUT |= RS;  }            // Set RS -> HIGH for Data mode
+
+    LCD_OUT = ((LCD_OUT & 0x0F) | (value & 0xF0));        pulseEN(); delay(1);      // Write high nibble first
+    LCD_OUT = ((LCD_OUT & 0x0F) | ((value << 4) & 0xF0)); pulseEN(); delay(1);      // Write low nibble next
+ }
+
+// Function to print a string on LCD
+void lcd_print(char *s)
+{
+    while(*s)
+    { lcd_write(*s, DATA); s++;  }
+}
+
+// Function to move cursor to desired position on LCD
+void lcd_setCursor(uint8_t row, uint8_t col)
+{
+    const uint8_t row_offsets[] = { 0x00, 0x40};
+    lcd_write(0x80 | (col + row_offsets[row]), CMD);
+    delay(1);
+}
+
+// Initialize LCD
+void lcd_init()
+{
+    P2SEL &= ~(BIT6+BIT7);
+    LCD_DIR |= (D4+D5+D6+D7+RS+EN);
+    LCD_OUT &= ~(D4+D5+D6+D7+RS+EN);
+
+    delay(150);                             // Wait for power up ( 15ms )
+    lcd_write(0x33, CMD);  delay(50);       // Initialization Sequence 1
+    lcd_write(0x32, CMD);  delay(1);        // Initialization Sequence 2
+
+    // All subsequent commands take 40 us to execute, except clear & cursor return (1.64 ms)
+    lcd_write(0x28, CMD); delay(1);          // 4 bit mode, 2 line
+    lcd_write(0x0F, CMD); delay(1);          // Display ON, Cursor ON, Blink ON
+    lcd_write(0x01, CMD); delay(20);         // Clear screen
+    lcd_write(0x06, CMD);  delay(1);         // Auto Increment Cursor
+    lcd_setCursor(0,0);                      // Goto Row 1 Column 1
+}
+//LCD fields updates
+void lcd_update()
+{
+    lcd_setCursor(0,0);
+    lcd_print("Distance: ");
+    inttostr(str, left_distance);
+    lcd_setCursor(1,0);
+    lcd_print(str);
+    inttostr(str, right_distance);
+    lcd_setCursor(1,8);
+    lcd_print(str);
+}
+void setup() {
+//    WDTCTL = WDTPW + WDTHOLD;       // Stop watchdog timer (look into this) try comment out
+// left ultrasonic sensor
+    P1DIR |= LEFT_TRIGGER_PIN;           // Set TRIGGER_PIN (P1.3) as output
+    P2DIR &= ~LEFT_ECHO_PIN;             // Set ECHO_PIN (P2.0) as input
+
+    P1OUT &= ~LEFT_TRIGGER_PIN;          // Set TRIGGER_PIN low
+
+    P1IE |= LEFT_ECHO_PIN;               // Enable interrupt for ECHO_PIN
+    P1IES &= ~LEFT_ECHO_PIN;             // Interrupt on low-to-high transition
+    P1IFG &= ~LEFT_ECHO_PIN;             // Clear interrupt flag
+
+    P1DIR |= LED_PIN;               // Set LED_PIN (P1.6) as output
+    P1OUT &= ~LED_PIN;              // Initialize LED_PIN low
+
+    P1DIR |= BUZZER;                // set buzzer to output (P1.2)
+    P1OUT &= ~BUZZER;               // set buzzer to low (off)
+ //   TA0CTL = TASSEL_2 + MC_2 + TACLR; // SMCLK, Continuous mode, Clear Timer A counter
+ //   TA0CCTL0 = CM_2 + CCIS_0 + SCS + CAP; // Capture mode, Rising edge, Capture input signal, Synchronous capture
+
+ // right ultrasonic sensor
+    P1DIR |= RIGHT_TRIGGER_PIN;           // Set TRIGGER_PIN (P1.5) as output
+    P1DIR &= ~RIGHT_ECHO_PIN;             // Set ECHO_PIN (P1.4) as input
+
+    P1OUT &= ~RIGHT_TRIGGER_PIN;          // Set TRIGGER_PIN low
+
+    P1IE |= RIGHT_ECHO_PIN;               // Enable interrupt for ECHO_PIN
+    P1IES &= ~RIGHT_ECHO_PIN;             // Interrupt on low-to-high transition
+    P1IFG &= ~RIGHT_ECHO_PIN;             // Clear interrupt flag
+
+ //   P1DIR |= LED_PIN;               // Set LED_PIN (P1.6) as output
+ //   P1OUT &= ~LED_PIN;              // Initialize LED_PIN low
+
+    TA0CTL = TASSEL_2 + MC_2 + TACLR; // SMCLK, Continuous mode, Clear Timer A counter
+    TA0CCTL0 = CM_2 + CCIS_0 + SCS + CAP; // Capture mode, Rising edge, Capture input signal, Synchronous capture
+
+}
+
+void sendTrigger1() {
+    // left ultrasonic sensor
+    P1OUT |= LEFT_TRIGGER_PIN;           // Set TRIGGER_PIN high
+    __delay_cycles(15);             // Wait for 10us
+    P1OUT &= ~LEFT_TRIGGER_PIN;          // Set TRIGGER_PIN low
+
+}
+void sendTrigger2() {
+    // right ultrasonic sensor
+    P1OUT |= RIGHT_TRIGGER_PIN;           // Set TRIGGER_PIN high
+    __delay_cycles(15);             // Wait for 10us
+    P1OUT &= ~RIGHT_TRIGGER_PIN;          // Set TRIGGER_PIN low
+}
+
+
+void main() {
+     WDTCTL = WDTPW + WDTHOLD;
+
+    lcd_init();
+    lcd_setCursor(0,0);
+
+    setup();
+    __enable_interrupt();           // Enable global interrupts
+
+    while (1) {
+
+        sendTrigger1();                   // Send ultrasonic trigger pulse
+// left ultrasonic sensor
+        while (!(P2IN & LEFT_ECHO_PIN)) {}    // Wait for ECHO_PIN to go high (voltage or
+
+        TA0CTL |= TACLR;                 // Clear Timer A counter
+
+        while (P2IN & LEFT_ECHO_PIN) {}       // Wait for ECHO_PIN to go low
+
+        left_distance = TA0R / 58;            // Calculate distance in centimeters
+
+        if (left_distance < 10) {
+            P1OUT |= LED_PIN;            // Turn on LED if distance is less than 10cm
+
+        } else {
+            P1OUT &= ~LED_PIN;           // Turn off LED and Buzzer otherwise
+        }
+
+
+// right ultrasonic sensor
+
+        sendTrigger2();
+        while (!(P1IN & RIGHT_ECHO_PIN)) {}    // Wait for ECHO_PIN to go high (voltage or
+
+        TA0CTL |= TACLR;                 // Clear Timer A counter
+
+        while (P1IN & RIGHT_ECHO_PIN) {}       // Wait for ECHO_PIN to go low
+
+        right_distance = TA0R / 58;            // Calculate distance in centimeters
+
+        if (right_distance < 10) {
+            P1OUT |= LED_PIN;            // Turn on LED if distance is less than 10cm
+            P1OUT |= BUZZER;
+        } else {
+            P1OUT &= ~LED_PIN;           // Turn off LED otherwise
+            P1OUT &= ~BUZZER;
+        }
+
+
+        __delay_cycles(10000);          // Delay 100ms
+
+        lcd_update();
+
+
+    }
+}
+#pragma vector=PORT1_VECTOR
+__interrupt void Port_1(void) {
+    if (P1IFG & LEFT_ECHO_PIN) {
+        P1IFG &= ~LEFT_ECHO_PIN;      // Clear interrupt flag
+    }
+    if (P1IFG & RIGHT_ECHO_PIN) {
+            P1IFG &= ~RIGHT_ECHO_PIN;      // Clear interrupt flag
+}
+}
+
+
